@@ -82,7 +82,8 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
             await this.queue.reject(task, `Unsafe output: ${outputSafety.reasons.join(', ')}`, outputSafety as unknown as Record<string, unknown>);
             continue;
           }
-          const imagePublicUrl = await this.images.generate(post.imagePrompt);
+          const imagePublicUrl = task.imagePublicUrl
+            ?? await this.images.generate(post.imagePrompt, task.sourceUrl);
           await this.queue.markReady(task.id, {
             factSummary: post.factSummary,
             caption: post.caption,
@@ -112,6 +113,11 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
         const task = await this.queue.claimReadyForPublishing();
         if (!task) break;
         try {
+          const refreshedImageUrl = await this.images.refreshSourceImage(task.imagePublicUrl, task.sourceUrl);
+          if (refreshedImageUrl && refreshedImageUrl !== task.imagePublicUrl) {
+            task.imagePublicUrl = refreshedImageUrl;
+            await this.queue.saveImageUrl(task.id, refreshedImageUrl);
+          }
           const mediaId = await this.instagram.publish(task);
           await this.queue.markPublished(task.id, mediaId, publishSlotKey);
           return true;

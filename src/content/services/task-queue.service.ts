@@ -191,6 +191,10 @@ export class TaskQueueService {
     await this.tasks.update(id, { instagramCreationId });
   }
 
+  async saveImageUrl(id: string, imagePublicUrl: string): Promise<void> {
+    await this.tasks.update(id, { imagePublicUrl });
+  }
+
   async markPublished(id: string, instagramMediaId: string, publishSlotKey?: string): Promise<void> {
     await this.tasks.update(id, {
       instagramMediaId,
