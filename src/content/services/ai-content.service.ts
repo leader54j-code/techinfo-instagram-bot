@@ -8,6 +8,7 @@ export interface GeneratedPost {
   caption: string;
   hashtags: string[];
   imageAltText: string;
+  imagePrompt: string;
   relevanceScore: number;
   confidence: number;
 }
@@ -15,12 +16,13 @@ export interface GeneratedPost {
 const schema = {
   type: 'object',
   additionalProperties: false,
-  required: ['factSummary', 'caption', 'hashtags', 'imageAltText', 'relevanceScore', 'confidence'],
+  required: ['factSummary', 'caption', 'hashtags', 'imageAltText', 'imagePrompt', 'relevanceScore', 'confidence'],
   properties: {
     factSummary: { type: 'string', minLength: 30, maxLength: 1000 },
     caption: { type: 'string', minLength: 50, maxLength: 1800 },
     hashtags: { type: 'array', minItems: 2, maxItems: 8, items: { type: 'string', pattern: '^#[A-Za-z0-9_]+$' } },
     imageAltText: { type: 'string', minLength: 10, maxLength: 500 },
+    imagePrompt: { type: 'string', minLength: 30, maxLength: 1000 },
     relevanceScore: { type: 'number', minimum: 0, maximum: 1 },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
   },
@@ -44,6 +46,7 @@ export class AiContentService {
         'Do not invent facts, dates, quotes, statistics, or certainty not present in the source.',
         'Avoid medical, legal, financial, political persuasion, graphic, sexual, hateful, or dangerous content.',
         'Use a calm informative tone. Do not use engagement bait. Attribute the source in the caption.',
+        'Create a square editorial illustration prompt matching the verified facts. Do not request logos, copyrighted characters, people, text, or watermarks.',
         'Return a low confidence score when the excerpt is incomplete or ambiguous.',
       ].join(' '),
       input: `TOPIC: ${task.topic}\nSOURCE TITLE: ${task.sourceTitle}\nSOURCE URL: ${task.sourceUrl}\nSOURCE EXCERPT:\n${task.sourceExcerpt}`,

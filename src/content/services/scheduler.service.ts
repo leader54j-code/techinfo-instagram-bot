@@ -5,6 +5,7 @@ import { CronJob } from 'cron';
 import { AiContentService } from './ai-content.service';
 import { CollectionService } from './collection.service';
 import { InstagramService } from './instagram.service';
+import { ImageGenerationService } from './image-generation.service';
 import { SafetyService } from './safety.service';
 import { TaskQueueService } from './task-queue.service';
 
@@ -29,6 +30,7 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
     private readonly queue: TaskQueueService,
     private readonly collector: CollectionService,
     private readonly ai: AiContentService,
+    private readonly images: ImageGenerationService,
     private readonly safety: SafetyService,
     private readonly instagram: InstagramService,
   ) {
@@ -80,11 +82,13 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
             await this.queue.reject(task, `Unsafe output: ${outputSafety.reasons.join(', ')}`, outputSafety as unknown as Record<string, unknown>);
             continue;
           }
+          const imagePublicUrl = await this.images.generate(post.imagePrompt);
           await this.queue.markReady(task.id, {
             factSummary: post.factSummary,
             caption: post.caption,
             hashtags: post.hashtags,
             imageAltText: task.imageAltText ?? post.imageAltText,
+            imagePublicUrl,
             safetyResult: outputSafety as unknown as Record<string, unknown>,
           });
           generated += 1;

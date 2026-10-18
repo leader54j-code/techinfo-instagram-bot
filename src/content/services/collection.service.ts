@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Parser = require('rss-parser');
+import OpenAI from 'openai';
 import { TaskQueueService } from './task-queue.service';
 
 type FeedItem = Parser.Item & {
@@ -12,13 +13,21 @@ type FeedItem = Parser.Item & {
 export class CollectionService {
   private readonly logger = new Logger(CollectionService.name);
   private readonly parser = new Parser();
+  private readonly openai: OpenAI;
+  private readonly webSearchEnabled: boolean;
+  private readonly model: string;
 
   constructor(
     private readonly config: ConfigService,
     private readonly queue: TaskQueueService,
-  ) {}
+  ) {
+    this.openai = new OpenAI({ apiKey: config.get<string>('OPENAI_API_KEY') ?? 'missing' });
+    this.webSearchEnabled = config.get<string>('ENABLE_AI_WEB_SEARCH') !== 'false';
+    this.model = config.get<string>('OPENAI_MODEL') ?? 'gpt-4o-mini';
+  }
 
   async collect(): Promise<number> {
+    if (this.webSearchEnabled) return this.collectWithAiWebSearch();
     const feeds = this.parseFeeds();
     const allowedHosts = new Set(
       (this.config.get<string>('ALLOWED_SOURCE_HOSTS') ?? '')
@@ -38,7 +47,7 @@ export class CollectionService {
           const excerpt = this.cleanText(item.contentSnippet ?? item.content ?? item.summary ?? '');
           if (excerpt.length < 80) continue;
           const imagePublicUrl = this.findImage(item) ?? this.config.get<string>('DEFAULT_POST_IMAGE_URL');
-          if (!imagePublicUrl || !this.isLikelyInstagramJpeg(imagePublicUrl)) continue;
+          if (imagePublicUrl && !this.isLikelyInstagramJpeg(imagePublicUrl)) continue;
           const fingerprint = this.queue.fingerprint(item.link, item.title);
           const existing = await this.queue.getByFingerprint(fingerprint);
           await this.queue.enqueue({
@@ -55,6 +64,54 @@ export class CollectionService {
       } catch (error) {
         this.logger.warn(`Feed collection failed for ${feedUrl}: ${String(error)}`);
       }
+    }
+    return added;
+  }
+
+  private async collectWithAiWebSearch(): Promise<number> {
+    const response = await this.openai.responses.create({
+      model: this.model,
+      tools: [{ type: 'web_search', search_context_size: 'medium' }],
+      tool_choice: 'required',
+      instructions: [
+        'Search the live web for three recent useful technology information items for a general Instagram audience.',
+        'Exclude rumors, politics, medical or financial advice, adult content, violence, wrongdoing, and sensational claims.',
+        'Verify each item with at least two credible sources. Prefer primary sources and reputable reporting.',
+        'Return only supported facts. Never fabricate URLs, dates, quotes, or statistics.',
+      ].join(' '),
+      input: `Find three distinct verified technology items for ${new Date().toISOString().slice(0, 10)}.`,
+      text: { format: {
+        type: 'json_schema', name: 'verified_technology_items', strict: true,
+        schema: {
+          type: 'object', additionalProperties: false, required: ['items'],
+          properties: { items: {
+            type: 'array', minItems: 3, maxItems: 3,
+            items: {
+              type: 'object', additionalProperties: false,
+              required: ['topic', 'title', 'verifiedSummary', 'sourceUrls'],
+              properties: {
+                topic: { type: 'string', minLength: 3, maxLength: 300 },
+                title: { type: 'string', minLength: 3, maxLength: 500 },
+                verifiedSummary: { type: 'string', minLength: 100, maxLength: 4000 },
+                sourceUrls: { type: 'array', minItems: 2, maxItems: 5, items: { type: 'string', format: 'uri' } },
+              },
+            },
+          } },
+        },
+      } },
+    });
+    if (!response.output_text) throw new Error('AI web search returned no content');
+    const result = JSON.parse(response.output_text) as { items: Array<{ topic: string; title: string; verifiedSummary: string; sourceUrls: string[] }> };
+    let added = 0;
+    for (const item of result.items) {
+      const sourceUrl = item.sourceUrls[0];
+      const fingerprint = this.queue.fingerprint(sourceUrl, item.title);
+      if (await this.queue.getByFingerprint(fingerprint)) continue;
+      await this.queue.enqueue({
+        topic: item.topic, sourceUrl, sourceTitle: item.title,
+        sourceExcerpt: `${item.verifiedSummary}\n\nVerification sources:\n${item.sourceUrls.join('\n')}`,
+      });
+      added += 1;
     }
     return added;
   }

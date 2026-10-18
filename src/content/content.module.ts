@@ -7,6 +7,7 @@ import { AdminApiKeyGuard } from './admin-api-key.guard';
 import { AiContentService } from './services/ai-content.service';
 import { CollectionService } from './services/collection.service';
 import { InstagramService } from './services/instagram.service';
+import { ImageGenerationService } from './services/image-generation.service';
 import { SafetyService } from './services/safety.service';
 import { SchedulerService } from './services/scheduler.service';
 import { TaskQueueService } from './services/task-queue.service';
@@ -20,6 +21,7 @@ import { ContentTask } from './entities/content-task.entity';
     AiContentService,
     CollectionService,
     InstagramService,
+    ImageGenerationService,
     SafetyService,
     SchedulerService,
     TaskQueueService,
