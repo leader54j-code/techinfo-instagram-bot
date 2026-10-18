@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Parser from 'rss-parser';
+import Parser = require('rss-parser');
 import { TaskQueueService } from './task-queue.service';
 
 type FeedItem = Parser.Item & {
