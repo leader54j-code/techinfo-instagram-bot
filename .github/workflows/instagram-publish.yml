@@ -1,0 +1,64 @@
+name: Trigger Instagram publishing slot
+
+on:
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: Publishing slot to test
+        required: true
+        type: choice
+        options:
+          - morning
+          - afternoon
+          - evening
+  schedule:
+    - cron: '5 6 * * *'
+      timezone: 'Asia/Kolkata'
+    - cron: '5 13 * * *'
+      timezone: 'Asia/Kolkata'
+    - cron: '5 18 * * *'
+      timezone: 'Asia/Kolkata'
+
+concurrency:
+  group: instagram-publish-slot
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Choose publishing slot
+        id: slot
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_SLOT: ${{ inputs.slot }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            slot="$MANUAL_SLOT"
+          else
+            case "$SCHEDULE" in
+              "5 6 * * *") slot="morning" ;;
+              "5 13 * * *") slot="afternoon" ;;
+              "5 18 * * *") slot="evening" ;;
+              *) echo "Unknown schedule: $SCHEDULE"; exit 1 ;;
+            esac
+          fi
+          echo "slot=$slot" >> "$GITHUB_OUTPUT"
+
+      - name: Wake Render and process one post
+        env:
+          SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+          SLOT: ${{ steps.slot.outputs.slot }}
+        run: |
+          curl --fail-with-body \
+            --retry 6 \
+            --retry-delay 15 \
+            --retry-all-errors \
+            --connect-timeout 90 \
+            --max-time 600 \
+            -X POST \
+            -H "x-admin-api-key: $ADMIN_API_KEY" \
+            "$SERVICE_URL/jobs/run-slot/$SLOT"
