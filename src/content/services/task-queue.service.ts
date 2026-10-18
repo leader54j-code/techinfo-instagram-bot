@@ -102,19 +102,35 @@ export class TaskQueueService {
   }
 
   async releaseStaleLocks(): Promise<number> {
-    const result = await this.tasks
+    const publishing = await this.tasks
       .createQueryBuilder()
       .update(ContentTask)
       .set({
         status: TaskStatus.PENDING,
-        stage: () => `CASE WHEN "stage" = '${TaskStage.PUBLISHING}' THEN '${TaskStage.READY}' ELSE '${TaskStage.COLLECTED}' END`,
+        stage: TaskStage.READY,
         lockedAt: null,
         lastError: 'Recovered stale processing lock',
       })
       .where('status = :status', { status: TaskStatus.PROCESSING })
+      .andWhere('stage = :stage', { stage: TaskStage.PUBLISHING })
       .andWhere('lockedAt < NOW() - INTERVAL \'15 minutes\'')
       .execute();
-    return result.affected ?? 0;
+
+    const generating = await this.tasks
+      .createQueryBuilder()
+      .update(ContentTask)
+      .set({
+        status: TaskStatus.PENDING,
+        stage: TaskStage.COLLECTED,
+        lockedAt: null,
+        lastError: 'Recovered stale processing lock',
+      })
+      .where('status = :status', { status: TaskStatus.PROCESSING })
+      .andWhere('stage != :stage', { stage: TaskStage.PUBLISHING })
+      .andWhere('lockedAt < NOW() - INTERVAL \'15 minutes\'')
+      .execute();
+
+    return (publishing.affected ?? 0) + (generating.affected ?? 0);
   }
 
   async reject(task: ContentTask, reason: string, safetyResult?: Record<string, unknown>): Promise<void> {
