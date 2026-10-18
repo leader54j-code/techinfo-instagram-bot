@@ -93,7 +93,7 @@ export class CollectionService {
                 topic: { type: 'string', minLength: 3, maxLength: 300 },
                 title: { type: 'string', minLength: 3, maxLength: 500 },
                 verifiedSummary: { type: 'string', minLength: 100, maxLength: 4000 },
-                sourceUrls: { type: 'array', minItems: 2, maxItems: 5, items: { type: 'string', format: 'uri' } },
+                sourceUrls: { type: 'array', minItems: 2, maxItems: 5, items: { type: 'string' } },
               },
             },
           } },
@@ -104,16 +104,30 @@ export class CollectionService {
     const result = JSON.parse(response.output_text) as { items: Array<{ topic: string; title: string; verifiedSummary: string; sourceUrls: string[] }> };
     let added = 0;
     for (const item of result.items) {
-      const sourceUrl = item.sourceUrls[0];
+      const sourceUrls = item.sourceUrls.filter((value) => this.isPublicHttpsUrl(value));
+      if (sourceUrls.length < 2) {
+        this.logger.warn(`Skipping web result without two valid HTTPS sources: ${item.title}`);
+        continue;
+      }
+      const sourceUrl = sourceUrls[0];
       const fingerprint = this.queue.fingerprint(sourceUrl, item.title);
       if (await this.queue.getByFingerprint(fingerprint)) continue;
       await this.queue.enqueue({
         topic: item.topic, sourceUrl, sourceTitle: item.title,
-        sourceExcerpt: `${item.verifiedSummary}\n\nVerification sources:\n${item.sourceUrls.join('\n')}`,
+        sourceExcerpt: `${item.verifiedSummary}\n\nVerification sources:\n${sourceUrls.join('\n')}`,
       });
       added += 1;
     }
     return added;
+  }
+
+  private isPublicHttpsUrl(value: string): boolean {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' && Boolean(url.hostname) && !['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+    } catch {
+      return false;
+    }
   }
 
   private parseFeeds(): string[] {
