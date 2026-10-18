@@ -22,7 +22,8 @@ export class CollectionService {
     private readonly queue: TaskQueueService,
   ) {
     this.openai = new OpenAI({ apiKey: config.get<string>('OPENAI_API_KEY') ?? 'missing' });
-    this.webSearchEnabled = config.get<string>('ENABLE_AI_WEB_SEARCH') !== 'false';
+    this.webSearchEnabled = config.get<string>('FREE_MODE') !== 'true'
+      && config.get<string>('ENABLE_AI_WEB_SEARCH') !== 'false';
     this.model = config.get<string>('OPENAI_MODEL') ?? 'gpt-4o-mini';
   }
 

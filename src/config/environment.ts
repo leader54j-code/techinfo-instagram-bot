@@ -11,6 +11,7 @@ export function validateEnvironment(input: Record<string, unknown>): Record<stri
   if (!input.DATABASE_URL) throw new Error('DATABASE_URL is required');
   if (input.NODE_ENV === 'production') {
     for (const key of requiredInProduction) {
+      if (key === 'OPENAI_API_KEY' && input.FREE_MODE === 'true') continue;
       if (!input[key]) throw new Error(`${key} is required in production`);
     }
   }

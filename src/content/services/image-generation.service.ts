@@ -10,14 +10,22 @@ export class ImageGenerationService {
   private readonly openai: OpenAI;
   private readonly model: string;
   private readonly baseUrl: string;
+  private readonly freeMode: boolean;
+  private readonly freeImageBaseUrl: string;
 
   constructor(config: ConfigService) {
     this.openai = new OpenAI({ apiKey: config.get<string>('OPENAI_API_KEY') ?? 'missing' });
     this.model = config.get<string>('OPENAI_IMAGE_MODEL') ?? 'gpt-image-1-mini';
     this.baseUrl = (config.get<string>('PUBLIC_BASE_URL') ?? '').replace(/\/$/, '');
+    this.freeMode = config.get<string>('FREE_MODE') === 'true';
+    this.freeImageBaseUrl = config.get<string>('FREE_IMAGE_BASE_URL')
+      ?? 'https://placehold.co/1080x1080/111827/FFFFFF.jpg';
   }
 
   async generate(prompt: string): Promise<string> {
+    if (this.freeMode) {
+      return `${this.freeImageBaseUrl}?text=${encodeURIComponent(prompt.slice(0, 120))}`;
+    }
     const result = await this.openai.images.generate({
       model: this.model,
       prompt: `Draw a clean square technology editorial illustration. ${prompt}`,

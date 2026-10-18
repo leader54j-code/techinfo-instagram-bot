@@ -19,14 +19,19 @@ const DISALLOWED_PATTERNS: Array<[RegExp, string]> = [
 export class SafetyService {
   private readonly openai: OpenAI;
   private readonly model: string;
+  private readonly freeMode: boolean;
 
   constructor(config: ConfigService) {
     this.openai = new OpenAI({ apiKey: config.get<string>('OPENAI_API_KEY') ?? 'missing' });
     this.model = config.get<string>('OPENAI_MODERATION_MODEL') ?? 'omni-moderation-latest';
+    this.freeMode = config.get<string>('FREE_MODE') === 'true';
   }
 
   async check(text: string): Promise<SafetyDecision> {
     const reasons = DISALLOWED_PATTERNS.filter(([pattern]) => pattern.test(text)).map(([, reason]) => reason);
+    if (this.freeMode) {
+      return { safe: reasons.length === 0, reasons, moderation: { provider: 'local-rules' } };
+    }
     const response = await this.openai.moderations.create({ model: this.model, input: text });
     const result = response.results[0];
     if (result.flagged) reasons.push('OpenAI moderation policy flag');
