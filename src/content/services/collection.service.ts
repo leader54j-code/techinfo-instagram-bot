@@ -47,8 +47,10 @@ export class CollectionService {
           this.assertAllowedUrl(item.link, allowedHosts);
           const excerpt = this.cleanText(item.contentSnippet ?? item.content ?? item.summary ?? '');
           if (excerpt.length < 80) continue;
-          const imagePublicUrl = this.findImage(item) ?? this.config.get<string>('DEFAULT_POST_IMAGE_URL');
-          if (imagePublicUrl && !this.isLikelyInstagramJpeg(imagePublicUrl)) continue;
+          const imageCandidate = this.findImage(item) ?? this.config.get<string>('DEFAULT_POST_IMAGE_URL');
+          const imagePublicUrl = imageCandidate && this.isLikelyInstagramJpeg(imageCandidate)
+            ? imageCandidate
+            : undefined;
           const fingerprint = this.queue.fingerprint(item.link, item.title);
           const existing = await this.queue.getByFingerprint(fingerprint);
           await this.queue.enqueue({
