@@ -48,7 +48,7 @@ export class CollectionService {
           const excerpt = this.cleanText(item.contentSnippet ?? item.content ?? item.summary ?? '');
           if (excerpt.length < 80) continue;
           const imageCandidate = this.findImage(item) ?? this.config.get<string>('DEFAULT_POST_IMAGE_URL');
-          const imagePublicUrl = imageCandidate && this.isLikelyInstagramJpeg(imageCandidate)
+          const imagePublicUrl = imageCandidate && this.isPublicHttpsUrl(imageCandidate)
             ? imageCandidate
             : undefined;
           const fingerprint = this.queue.fingerprint(item.link, item.title);
@@ -158,15 +158,10 @@ export class CollectionService {
   }
 
   private findImage(item: FeedItem): string | undefined {
-    return item.enclosure?.url ?? item['media:content']?.$?.url;
-  }
-
-  private isLikelyInstagramJpeg(value: string): boolean {
-    try {
-      const url = new URL(value);
-      return url.protocol === 'https:' && /\.jpe?g$/i.test(url.pathname);
-    } catch {
-      return false;
+    const enclosure = item.enclosure;
+    if (enclosure?.url && (!enclosure.type || enclosure.type.startsWith('image/'))) {
+      return enclosure.url;
     }
+    return item['media:content']?.$?.url;
   }
 }

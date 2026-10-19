@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import OpenAI from 'openai';
+import sharp from 'sharp';
 
 @Injectable()
 export class ImageGenerationService {
@@ -24,12 +25,25 @@ export class ImageGenerationService {
     this.useSourceImages = config.get<string>('USE_SOURCE_IMAGES') === 'true';
   }
 
-  async generate(prompt: string, sourceUrl?: string): Promise<string> {
-    if (this.freeMode) {
-      if (this.useSourceImages && sourceUrl) {
-        const sourceImage = await this.findSourceJpeg(sourceUrl);
-        if (sourceImage) return sourceImage;
+  async prepare(currentUrl: string | null, prompt: string, sourceUrl?: string): Promise<string> {
+    if (this.useSourceImages) {
+      const candidates: string[] = [];
+      if (currentUrl && !currentUrl.includes('placehold.co')) candidates.push(currentUrl);
+      if (sourceUrl) {
+        const articleImage = await this.findSourceImage(sourceUrl);
+        if (articleImage && !candidates.includes(articleImage)) candidates.push(articleImage);
       }
+      for (const candidate of candidates) {
+        const converted = await this.convertToInstagramJpeg(candidate);
+        if (converted) return converted;
+      }
+    }
+    if (currentUrl && !currentUrl.includes('placehold.co')) return currentUrl;
+    return this.generate(prompt);
+  }
+
+  async generate(prompt: string): Promise<string> {
+    if (this.freeMode) {
       return `${this.freeImageBaseUrl}?text=${encodeURIComponent(prompt.slice(0, 120))}`;
     }
     const result = await this.openai.images.generate({
@@ -48,10 +62,13 @@ export class ImageGenerationService {
 
   async refreshSourceImage(currentUrl: string | null, sourceUrl: string): Promise<string | null> {
     if (!this.freeMode || !this.useSourceImages) return currentUrl;
-    return await this.findSourceJpeg(sourceUrl) ?? currentUrl;
+    if (currentUrl?.startsWith(`${this.baseUrl}/media/`)) return currentUrl;
+    const articleImage = await this.findSourceImage(sourceUrl);
+    if (!articleImage) return currentUrl;
+    return await this.convertToInstagramJpeg(articleImage) ?? currentUrl;
   }
 
-  private async findSourceJpeg(sourceUrl: string): Promise<string | undefined> {
+  private async findSourceImage(sourceUrl: string): Promise<string | undefined> {
     try {
       const articleUrl = new URL(sourceUrl);
       if (articleUrl.protocol !== 'https:') return undefined;
@@ -73,7 +90,7 @@ export class ImageGenerationService {
         const content = attributes.get('content');
         if (!content) continue;
         const imageUrl = new URL(content.replace(/&amp;/g, '&'), articleUrl).toString();
-        if (this.isPublicJpeg(imageUrl)) return imageUrl;
+        if (this.isPublicHttpsUrl(imageUrl)) return imageUrl;
       }
       return undefined;
     } catch {
@@ -81,11 +98,43 @@ export class ImageGenerationService {
     }
   }
 
-  private isPublicJpeg(value: string): boolean {
+  private async convertToInstagramJpeg(imageUrl: string): Promise<string | undefined> {
+    if (!this.isPublicHttpsUrl(imageUrl)) return undefined;
+    try {
+      const response = await fetch(imageUrl, {
+        headers: { Accept: 'image/*', 'User-Agent': 'TechInfoInstagramBot/1.0' },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15_000),
+      });
+      const contentType = response.headers.get('content-type')?.split(';')[0].toLowerCase();
+      const allowedTypes = new Set([
+        'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/tiff', 'image/avif',
+      ]);
+      if (!response.ok || !contentType || !allowedTypes.has(contentType)) return undefined;
+      const declaredSize = Number(response.headers.get('content-length') ?? 0);
+      if (declaredSize > 20 * 1024 * 1024) return undefined;
+      const input = Buffer.from(await response.arrayBuffer());
+      if (input.length === 0 || input.length > 20 * 1024 * 1024) return undefined;
+      const output = await sharp(input, { failOn: 'warning', limitInputPixels: 40_000_000 })
+        .rotate()
+        .resize(1080, 1080, { fit: 'cover', position: 'attention' })
+        .flatten({ background: '#111827' })
+        .jpeg({ quality: 85, mozjpeg: true })
+        .toBuffer();
+      const filename = `${randomUUID()}.jpg`;
+      const directory = join(process.cwd(), 'uploads');
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, filename), output);
+      return `${this.baseUrl}/media/${filename}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private isPublicHttpsUrl(value: string): boolean {
     try {
       const url = new URL(value);
       return url.protocol === 'https:'
-        && /\.jpe?g$/i.test(url.pathname)
         && !['localhost', '127.0.0.1', '::1'].includes(url.hostname);
     } catch {
       return false;

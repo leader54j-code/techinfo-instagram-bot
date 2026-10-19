@@ -82,8 +82,11 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
             await this.queue.reject(task, `Unsafe output: ${outputSafety.reasons.join(', ')}`, outputSafety as unknown as Record<string, unknown>);
             continue;
           }
-          const imagePublicUrl = task.imagePublicUrl
-            ?? await this.images.generate(post.imagePrompt, task.sourceUrl);
+          const imagePublicUrl = await this.images.prepare(
+            task.imagePublicUrl,
+            post.imagePrompt,
+            task.sourceUrl,
+          );
           await this.queue.markReady(task.id, {
             factSummary: post.factSummary,
             caption: post.caption,
