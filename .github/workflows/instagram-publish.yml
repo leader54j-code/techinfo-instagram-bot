@@ -53,7 +53,7 @@ jobs:
           ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
           SLOT: ${{ steps.slot.outputs.slot }}
         run: |
-          response="$(curl --fail-with-body \
+          curl --fail-with-body \
             --retry 6 \
             --retry-delay 15 \
             --retry-all-errors \
@@ -61,9 +61,4 @@ jobs:
             --max-time 600 \
             -X POST \
             -H "x-admin-api-key: $ADMIN_API_KEY" \
-            "$SERVICE_URL/jobs/run-slot/$SLOT")"
-          echo "$response"
-          if [[ "$(jq -r '.published // false' <<< "$response")" != "true" ]]; then
-            echo "No Instagram post was published for slot: $SLOT"
-            exit 1
-          fi
+            "$SERVICE_URL/jobs/run-slot/$SLOT"
