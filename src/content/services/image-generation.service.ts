@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -8,12 +8,14 @@ import sharp from 'sharp';
 
 @Injectable()
 export class ImageGenerationService {
+  private readonly logger = new Logger(ImageGenerationService.name);
   private readonly openai: OpenAI;
   private readonly model: string;
   private readonly baseUrl: string;
   private readonly freeMode: boolean;
   private readonly freeImageBaseUrl: string;
   private readonly useSourceImages: boolean;
+  private readonly imageProxyBaseUrl: string;
 
   constructor(config: ConfigService) {
     this.openai = new OpenAI({ apiKey: config.get<string>('OPENAI_API_KEY') ?? 'missing' });
@@ -22,7 +24,8 @@ export class ImageGenerationService {
     this.freeMode = config.get<string>('FREE_MODE') === 'true';
     this.freeImageBaseUrl = config.get<string>('FREE_IMAGE_BASE_URL')
       ?? 'https://placehold.co/1080x1080/111827/FFFFFF.jpg';
-    this.useSourceImages = config.get<string>('USE_SOURCE_IMAGES') === 'true';
+    this.useSourceImages = config.get<string>('USE_SOURCE_IMAGES') !== 'false';
+    this.imageProxyBaseUrl = config.get<string>('IMAGE_PROXY_BASE_URL') ?? 'https://wsrv.nl/';
   }
 
   async prepare(currentUrl: string | null, prompt: string, sourceUrl?: string): Promise<string> {
@@ -34,9 +37,10 @@ export class ImageGenerationService {
         if (articleImage && !candidates.includes(articleImage)) candidates.push(articleImage);
       }
       for (const candidate of candidates) {
-        const converted = await this.convertToInstagramJpeg(candidate);
+        const converted = await this.convertToInstagramJpeg(candidate, sourceUrl);
         if (converted) return converted;
       }
+      this.logger.warn(`No usable source image found for ${sourceUrl ?? 'unknown source'}; using fallback image`);
     }
     if (currentUrl && !currentUrl.includes('placehold.co')) return currentUrl;
     return this.generate(prompt);
@@ -65,7 +69,7 @@ export class ImageGenerationService {
     if (currentUrl?.startsWith(`${this.baseUrl}/media/`)) return currentUrl;
     const articleImage = await this.findSourceImage(sourceUrl);
     if (!articleImage) return currentUrl;
-    return await this.convertToInstagramJpeg(articleImage) ?? currentUrl;
+    return await this.convertToInstagramJpeg(articleImage, sourceUrl) ?? currentUrl;
   }
 
   private async findSourceImage(sourceUrl: string): Promise<string | undefined> {
@@ -73,11 +77,18 @@ export class ImageGenerationService {
       const articleUrl = new URL(sourceUrl);
       if (articleUrl.protocol !== 'https:') return undefined;
       const response = await fetch(articleUrl, {
-        headers: { 'User-Agent': 'TechInfoInstagramBot/1.0' },
+        headers: {
+          Accept: 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'User-Agent': 'Mozilla/5.0 (compatible; TechInfoInstagramBot/1.0; +https://techinfo-instagram-bot.onrender.com)',
+        },
         redirect: 'follow',
         signal: AbortSignal.timeout(10_000),
       });
-      if (!response.ok || !response.headers.get('content-type')?.includes('text/html')) return undefined;
+      if (!response.ok) {
+        this.logger.warn(`Article fetch failed (${response.status}) for ${sourceUrl}`);
+        return undefined;
+      }
       const html = (await response.text()).slice(0, 2_000_000);
       const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
       for (const tag of tags) {
@@ -93,29 +104,42 @@ export class ImageGenerationService {
         if (this.isPublicHttpsUrl(imageUrl)) return imageUrl;
       }
       return undefined;
-    } catch {
+    } catch (error) {
+      this.logger.warn(`Could not discover source image for ${sourceUrl}: ${this.errorMessage(error)}`);
       return undefined;
     }
   }
 
-  private async convertToInstagramJpeg(imageUrl: string): Promise<string | undefined> {
+  private async convertToInstagramJpeg(imageUrl: string, referer?: string): Promise<string | undefined> {
     if (!this.isPublicHttpsUrl(imageUrl)) return undefined;
     try {
       const response = await fetch(imageUrl, {
-        headers: { Accept: 'image/*', 'User-Agent': 'TechInfoInstagramBot/1.0' },
+        headers: {
+          Accept: 'image/avif,image/webp,image/png,image/jpeg,image/gif,image/tiff,*/*;q=0.5',
+          Referer: referer ?? new URL(imageUrl).origin,
+          'User-Agent': 'Mozilla/5.0 (compatible; TechInfoInstagramBot/1.0; +https://techinfo-instagram-bot.onrender.com)',
+        },
         redirect: 'follow',
         signal: AbortSignal.timeout(15_000),
       });
-      const contentType = response.headers.get('content-type')?.split(';')[0].toLowerCase();
-      const allowedTypes = new Set([
-        'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/tiff', 'image/avif',
-      ]);
-      if (!response.ok || !contentType || !allowedTypes.has(contentType)) return undefined;
+      if (!response.ok) {
+        this.logger.warn(`Image fetch failed (${response.status}) for ${imageUrl}`);
+        return this.buildProxyJpegUrl(imageUrl);
+      }
       const declaredSize = Number(response.headers.get('content-length') ?? 0);
-      if (declaredSize > 20 * 1024 * 1024) return undefined;
+      if (declaredSize > 20 * 1024 * 1024) return this.buildProxyJpegUrl(imageUrl);
       const input = Buffer.from(await response.arrayBuffer());
-      if (input.length === 0 || input.length > 20 * 1024 * 1024) return undefined;
-      const output = await sharp(input, { failOn: 'warning', limitInputPixels: 40_000_000 })
+      if (input.length === 0 || input.length > 20 * 1024 * 1024) {
+        return this.buildProxyJpegUrl(imageUrl);
+      }
+      const image = sharp(input, { failOn: 'warning', limitInputPixels: 40_000_000 });
+      const metadata = await image.metadata();
+      const supportedFormats = new Set(['jpeg', 'png', 'webp', 'gif', 'tiff', 'avif']);
+      if (!metadata.format || !supportedFormats.has(metadata.format)) {
+        this.logger.warn(`Unsupported decoded image format for ${imageUrl}: ${metadata.format ?? 'unknown'}`);
+        return this.buildProxyJpegUrl(imageUrl);
+      }
+      const output = await image
         .rotate()
         .resize(1080, 1080, { fit: 'cover', position: 'attention' })
         .flatten({ background: '#111827' })
@@ -126,9 +150,24 @@ export class ImageGenerationService {
       await mkdir(directory, { recursive: true });
       await writeFile(join(directory, filename), output);
       return `${this.baseUrl}/media/${filename}`;
-    } catch {
-      return undefined;
+    } catch (error) {
+      this.logger.warn(`Image conversion failed for ${imageUrl}: ${this.errorMessage(error)}`);
+      return this.buildProxyJpegUrl(imageUrl);
     }
+  }
+
+  private buildProxyJpegUrl(imageUrl: string): string {
+    const proxy = new URL(this.imageProxyBaseUrl);
+    proxy.searchParams.set('url', imageUrl);
+    proxy.searchParams.set('w', '1080');
+    proxy.searchParams.set('h', '1080');
+    proxy.searchParams.set('fit', 'cover');
+    proxy.searchParams.set('output', 'jpg');
+    return proxy.toString();
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private isPublicHttpsUrl(value: string): boolean {
