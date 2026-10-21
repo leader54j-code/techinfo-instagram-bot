@@ -16,6 +16,11 @@ export class ImageGenerationService {
   private readonly freeImageBaseUrl: string;
   private readonly useSourceImages: boolean;
   private readonly imageProxyBaseUrl: string;
+  private readonly imageProvider: string;
+  private readonly generateAiImages: boolean;
+  private readonly cloudflareAccountId: string;
+  private readonly cloudflareApiToken: string;
+  private readonly cloudflareImageModel: string;
 
   constructor(config: ConfigService) {
     this.openai = new OpenAI({ apiKey: config.get<string>('OPENAI_API_KEY') ?? 'missing' });
@@ -26,9 +31,24 @@ export class ImageGenerationService {
       ?? 'https://placehold.co/1080x1080/111827/FFFFFF.jpg';
     this.useSourceImages = config.get<string>('USE_SOURCE_IMAGES') !== 'false';
     this.imageProxyBaseUrl = config.get<string>('IMAGE_PROXY_BASE_URL') ?? 'https://wsrv.nl/';
+    this.imageProvider = (config.get<string>('IMAGE_PROVIDER') ?? 'openai').toLowerCase();
+    this.generateAiImages = config.get<string>('GENERATE_AI_IMAGES') === 'true';
+    this.cloudflareAccountId = config.get<string>('CLOUDFLARE_ACCOUNT_ID') ?? '';
+    this.cloudflareApiToken = config.get<string>('CLOUDFLARE_API_TOKEN') ?? '';
+    this.cloudflareImageModel = config.get<string>('CLOUDFLARE_IMAGE_MODEL')
+      ?? '@cf/black-forest-labs/flux-1-schnell';
   }
 
   async prepare(currentUrl: string | null, prompt: string, sourceUrl?: string): Promise<string> {
+    if (this.generateAiImages) {
+      try {
+        return await this.generate(prompt);
+      } catch (error) {
+        this.logger.warn(
+          `AI image generation failed; trying source image: ${this.errorMessage(error)}`,
+        );
+      }
+    }
     if (this.useSourceImages) {
       const candidates: string[] = [];
       if (currentUrl && !currentUrl.includes('placehold.co')) candidates.push(currentUrl);
@@ -47,6 +67,9 @@ export class ImageGenerationService {
   }
 
   async generate(prompt: string): Promise<string> {
+    if (this.imageProvider === 'cloudflare') {
+      return this.generateWithCloudflare(prompt);
+    }
     if (this.freeMode) {
       return `${this.freeImageBaseUrl}?text=${encodeURIComponent(prompt.slice(0, 120))}`;
     }
@@ -61,6 +84,71 @@ export class ImageGenerationService {
     const directory = join(process.cwd(), 'uploads');
     await mkdir(directory, { recursive: true });
     await writeFile(join(directory, filename), Buffer.from(encoded, 'base64'));
+    return `${this.baseUrl}/media/${filename}`;
+  }
+
+  private async generateWithCloudflare(prompt: string): Promise<string> {
+    if (!this.cloudflareAccountId || !this.cloudflareApiToken) {
+      throw new Error('Cloudflare image generation credentials are missing');
+    }
+
+    const endpoint = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(this.cloudflareAccountId)}/ai/run/${this.cloudflareImageModel}`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.cloudflareApiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt: [
+          'Create a square editorial technology illustration for an Instagram news post.',
+          prompt.slice(0, 1500),
+          'Visually communicate the subject accurately. No words, letters, logos, watermarks,',
+          'UI screenshots, misleading claims, graphic content, or photorealistic public figures.',
+        ].join(' '),
+        steps: 4,
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    if (!response.ok) {
+      const details = (await response.text()).slice(0, 500);
+      throw new Error(`Cloudflare Workers AI returned ${response.status}: ${details}`);
+    }
+
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+    let imageBuffer: Buffer;
+    if (contentType.startsWith('image/')) {
+      imageBuffer = Buffer.from(await response.arrayBuffer());
+    } else {
+      const payload = await response.json() as {
+        result?: { image?: string } | string;
+        image?: string;
+      };
+      const encoded = typeof payload.result === 'string'
+        ? payload.result
+        : payload.result?.image ?? payload.image;
+      if (!encoded) throw new Error('Cloudflare Workers AI returned no image');
+      imageBuffer = Buffer.from(encoded.replace(/^data:image\/[^;]+;base64,/, ''), 'base64');
+    }
+
+    return this.saveInstagramJpeg(imageBuffer);
+  }
+
+  private async saveInstagramJpeg(input: Buffer): Promise<string> {
+    if (input.length === 0 || input.length > 20 * 1024 * 1024) {
+      throw new Error('Generated image is empty or exceeds 20 MB');
+    }
+    const output = await sharp(input, { failOn: 'warning', limitInputPixels: 40_000_000 })
+      .rotate()
+      .resize(1080, 1080, { fit: 'cover', position: 'attention' })
+      .flatten({ background: '#111827' })
+      .jpeg({ quality: 88, mozjpeg: true })
+      .toBuffer();
+    const filename = `${randomUUID()}.jpg`;
+    const directory = join(process.cwd(), 'uploads');
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, filename), output);
     return `${this.baseUrl}/media/${filename}`;
   }
 
