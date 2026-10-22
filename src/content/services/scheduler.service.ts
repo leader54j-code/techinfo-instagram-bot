@@ -15,6 +15,19 @@ export enum PublishSlot {
   EVENING = 'evening',
 }
 
+export type PublishReason =
+  | 'published'
+  | 'slot_already_completed'
+  | 'daily_limit_reached'
+  | 'no_ready_task'
+  | 'publish_failed'
+  | 'publisher_busy';
+
+export interface PublishOutcome {
+  published: boolean;
+  reason: PublishReason;
+}
+
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(SchedulerService.name);
@@ -108,25 +121,25 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
     }
   }
 
-  async publishBatch(requested: number, publishSlotKey?: string): Promise<boolean> {
-    if (this.publishing) return false;
+  async publishBatch(requested: number, publishSlotKey?: string): Promise<PublishOutcome> {
+    if (this.publishing) return { published: false, reason: 'publisher_busy' };
     this.publishing = true;
     try {
       if (publishSlotKey && await this.queue.hasCompletedSlot(publishSlotKey)) {
         this.logger.log(`Skipping completed publishing slot ${publishSlotKey}`);
-        return false;
+        return { published: false, reason: 'slot_already_completed' };
       }
       const alreadyPublished = await this.queue.publishedToday(this.timezone);
       const count = Math.min(requested, Math.max(0, this.dailyLimit - alreadyPublished));
       if (count === 0) {
         this.logger.log(`Daily publishing limit reached (${alreadyPublished}/${this.dailyLimit})`);
-        return false;
+        return { published: false, reason: 'daily_limit_reached' };
       }
       for (let index = 0; index < count; index += 1) {
         const task = await this.queue.claimReadyForPublishing();
         if (!task) {
           this.logger.warn('No Ready publishing task is currently eligible; it may be in retry backoff');
-          break;
+          return { published: false, reason: 'no_ready_task' };
         }
         try {
           const refreshedImageUrl = await this.images.refreshSourceImage(
@@ -141,26 +154,29 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
           }
           const mediaId = await this.instagram.publish(task);
           await this.queue.markPublished(task.id, mediaId, publishSlotKey);
-          return true;
+          return { published: true, reason: 'published' };
         } catch (error) {
           this.logger.warn(
             `Publishing failed for task ${task.id}: ${this.errorMessage(error)}`,
           );
           await this.queue.markAttemptFailed(task, error);
+          return { published: false, reason: 'publish_failed' };
         }
       }
-      return false;
+      return { published: false, reason: 'no_ready_task' };
     } finally {
       this.publishing = false;
     }
   }
 
-  async runExternalSlot(slot: PublishSlot): Promise<{ slot: PublishSlot; slotKey: string; published: boolean }> {
+  async runExternalSlot(
+    slot: PublishSlot,
+  ): Promise<{ slot: PublishSlot; slotKey: string; published: boolean; reason: PublishReason }> {
     await this.queue.releaseStaleLocks();
     await this.collectAndPrepare();
     const slotKey = this.slotKey(slot);
-    const published = await this.publishBatch(1, slotKey);
-    return { slot, slotKey, published };
+    const outcome = await this.publishBatch(1, slotKey);
+    return { slot, slotKey, ...outcome };
   }
 
   private slotKey(slot: PublishSlot): string {
