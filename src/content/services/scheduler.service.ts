@@ -136,6 +136,7 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
           );
           if (refreshedImageUrl && refreshedImageUrl !== task.imagePublicUrl) {
             task.imagePublicUrl = refreshedImageUrl;
+            task.instagramCreationId = null;
             await this.queue.saveImageUrl(task.id, refreshedImageUrl);
           }
           const mediaId = await this.instagram.publish(task);

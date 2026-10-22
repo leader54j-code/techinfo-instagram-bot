@@ -192,7 +192,9 @@ export class TaskQueueService {
   }
 
   async saveImageUrl(id: string, imagePublicUrl: string): Promise<void> {
-    await this.tasks.update(id, { imagePublicUrl });
+    // An Instagram creation container is permanently tied to the image URL
+    // used to create it. A refreshed image therefore requires a new container.
+    await this.tasks.update(id, { imagePublicUrl, instagramCreationId: null });
   }
 
   async markPublished(id: string, instagramMediaId: string, publishSlotKey?: string): Promise<void> {
