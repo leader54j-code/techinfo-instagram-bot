@@ -4,7 +4,12 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import OpenAI from 'openai';
-import sharp from 'sharp';
+import type sharpFactory from 'sharp';
+
+// Sharp 0.35 exposes a CommonJS callable at runtime, while its type package also
+// advertises an ESM default. Requiring it directly avoids a `.default` call in
+// the CommonJS bundle produced by Nest.
+const sharp = require('sharp') as typeof sharpFactory;
 
 @Injectable()
 export class ImageGenerationService {
