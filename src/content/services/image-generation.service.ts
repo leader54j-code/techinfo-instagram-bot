@@ -157,9 +157,22 @@ export class ImageGenerationService {
     return `${this.baseUrl}/media/${filename}`;
   }
 
-  async refreshSourceImage(currentUrl: string | null, sourceUrl: string): Promise<string | null> {
-    if (!this.freeMode || !this.useSourceImages) return currentUrl;
+  async refreshSourceImage(
+    currentUrl: string | null,
+    sourceUrl: string,
+    prompt?: string,
+  ): Promise<string | null> {
     if (currentUrl?.startsWith(`${this.baseUrl}/media/`)) return currentUrl;
+    if (this.generateAiImages && prompt) {
+      try {
+        return await this.generate(prompt);
+      } catch (error) {
+        this.logger.warn(
+          `AI image refresh failed; trying source image: ${this.errorMessage(error)}`,
+        );
+      }
+    }
+    if (!this.useSourceImages) return currentUrl;
     const articleImage = await this.findSourceImage(sourceUrl);
     if (!articleImage) return currentUrl;
     return await this.convertToInstagramJpeg(articleImage, sourceUrl) ?? currentUrl;

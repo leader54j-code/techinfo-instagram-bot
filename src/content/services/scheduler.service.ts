@@ -116,7 +116,11 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
         const task = await this.queue.claimReadyForPublishing();
         if (!task) break;
         try {
-          const refreshedImageUrl = await this.images.refreshSourceImage(task.imagePublicUrl, task.sourceUrl);
+          const refreshedImageUrl = await this.images.refreshSourceImage(
+            task.imagePublicUrl,
+            task.sourceUrl,
+            task.factSummary ?? task.sourceTitle,
+          );
           if (refreshedImageUrl && refreshedImageUrl !== task.imagePublicUrl) {
             task.imagePublicUrl = refreshedImageUrl;
             await this.queue.saveImageUrl(task.id, refreshedImageUrl);
