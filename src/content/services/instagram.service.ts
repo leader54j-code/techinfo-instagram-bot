@@ -71,7 +71,8 @@ export class InstagramService {
   }
 
   private async waitUntilReady(creationId: string): Promise<void> {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    const maxAttempts = 20;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const response = await this.http.axiosRef.get<{ status_code?: string }>(
         `${this.baseUrl}/${this.version}/${creationId}`,
         { params: { fields: 'status_code', access_token: this.token }, timeout: 15_000 },
@@ -80,8 +81,10 @@ export class InstagramService {
       if (response.data.status_code === 'ERROR' || response.data.status_code === 'EXPIRED') {
         throw new Error(`Instagram container status: ${response.data.status_code}`);
       }
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      if (attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+      }
     }
-    throw new Error('Instagram media container was not ready in time');
+    throw new Error('Instagram media container was not ready after 60 seconds');
   }
 }

@@ -97,6 +97,9 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
           });
           generated += 1;
         } catch (error) {
+          this.logger.warn(
+            `Generation failed for task ${task.id}: ${this.errorMessage(error)}`,
+          );
           await this.queue.markAttemptFailed(task, error);
         }
       }
@@ -109,12 +112,22 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
     if (this.publishing) return false;
     this.publishing = true;
     try {
-      if (publishSlotKey && await this.queue.hasCompletedSlot(publishSlotKey)) return false;
+      if (publishSlotKey && await this.queue.hasCompletedSlot(publishSlotKey)) {
+        this.logger.log(`Skipping completed publishing slot ${publishSlotKey}`);
+        return false;
+      }
       const alreadyPublished = await this.queue.publishedToday(this.timezone);
       const count = Math.min(requested, Math.max(0, this.dailyLimit - alreadyPublished));
+      if (count === 0) {
+        this.logger.log(`Daily publishing limit reached (${alreadyPublished}/${this.dailyLimit})`);
+        return false;
+      }
       for (let index = 0; index < count; index += 1) {
         const task = await this.queue.claimReadyForPublishing();
-        if (!task) break;
+        if (!task) {
+          this.logger.warn('No Ready publishing task is currently eligible; it may be in retry backoff');
+          break;
+        }
         try {
           const refreshedImageUrl = await this.images.refreshSourceImage(
             task.imagePublicUrl,
@@ -129,6 +142,9 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
           await this.queue.markPublished(task.id, mediaId, publishSlotKey);
           return true;
         } catch (error) {
+          this.logger.warn(
+            `Publishing failed for task ${task.id}: ${this.errorMessage(error)}`,
+          );
           await this.queue.markAttemptFailed(task, error);
         }
       }
@@ -155,6 +171,10 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
     }).formatToParts(new Date());
     const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
     return `${value('year')}-${value('month')}-${value('day')}:${slot}`;
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private addJob(name: string, expression: string, callback: () => Promise<unknown>): void {
