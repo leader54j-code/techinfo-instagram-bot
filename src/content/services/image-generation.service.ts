@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import OpenAI from 'openai';
 import type sharpFactory from 'sharp';
 
@@ -162,7 +162,10 @@ export class ImageGenerationService {
     sourceUrl: string,
     prompt?: string,
   ): Promise<string | null> {
-    if (currentUrl?.startsWith(`${this.baseUrl}/media/`)) return currentUrl;
+    if (currentUrl?.startsWith(`${this.baseUrl}/media/`)) {
+      if (await this.localMediaExists(currentUrl)) return currentUrl;
+      this.logger.warn(`Generated media file no longer exists; regenerating ${currentUrl}`);
+    }
     if (this.generateAiImages && prompt) {
       try {
         return await this.generate(prompt);
@@ -274,6 +277,18 @@ export class ImageGenerationService {
 
   private errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  private async localMediaExists(mediaUrl: string): Promise<boolean> {
+    try {
+      const url = new URL(mediaUrl);
+      const filename = basename(decodeURIComponent(url.pathname));
+      if (!/^[0-9a-f-]+\.jpg$/i.test(filename)) return false;
+      await access(join(process.cwd(), 'uploads', filename));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private isPublicHttpsUrl(value: string): boolean {
