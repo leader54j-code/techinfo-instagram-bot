@@ -26,6 +26,7 @@ export type PublishReason =
 export interface PublishOutcome {
   published: boolean;
   reason: PublishReason;
+  error?: string;
 }
 
 @Injectable()
@@ -152,15 +153,21 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
             task.instagramCreationId = null;
             await this.queue.saveImageUrl(task.id, refreshedImageUrl);
           }
+          if (task.attemptCount > 0 && task.instagramCreationId) {
+            this.logger.log(`Discarding stale Instagram container for retry task ${task.id}`);
+            task.instagramCreationId = null;
+            await this.queue.clearCreationId(task.id);
+          }
           const mediaId = await this.instagram.publish(task);
           await this.queue.markPublished(task.id, mediaId, publishSlotKey);
           return { published: true, reason: 'published' };
         } catch (error) {
+          const message = this.errorMessage(error);
           this.logger.warn(
-            `Publishing failed for task ${task.id}: ${this.errorMessage(error)}`,
+            `Publishing failed for task ${task.id}: ${message}`,
           );
           await this.queue.markAttemptFailed(task, error);
-          return { published: false, reason: 'publish_failed' };
+          return { published: false, reason: 'publish_failed', error: message.slice(0, 1000) };
         }
       }
       return { published: false, reason: 'no_ready_task' };
@@ -191,6 +198,18 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
   }
 
   private errorMessage(error: unknown): string {
+    if (error && typeof error === 'object' && 'response' in error) {
+      const response = (error as { response?: { status?: number; data?: unknown } }).response;
+      if (response) {
+        let details: string;
+        try {
+          details = JSON.stringify(response.data);
+        } catch {
+          details = String(response.data);
+        }
+        return `HTTP ${response.status ?? 'error'}: ${details}`;
+      }
+    }
     return error instanceof Error ? error.message : String(error);
   }
 
